@@ -510,7 +510,7 @@ function drawTextWithStroke(text, x, y, fontSize, opacity) {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.strokeStyle = '#2A2A2A';
-    ctx.lineWidth = 4;
+    ctx.lineWidth = Math.max(1, 3 / state.viewScale);
     ctx.strokeText(text, x, y);
     ctx.fillStyle = '#FFFFFF';
     ctx.fillText(text, x, y);
@@ -520,6 +520,15 @@ function drawTextWithStroke(text, x, y, fontSize, opacity) {
 function draw() {
     ctx.fillStyle = '#FFF';
     ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+
+    // ラベルスケーリング：拡大すると大きく、縮小時は小さく。clampで上下限
+    // 画面上の見た目サイズ = fontSize（canvas座標） × viewScale
+    // → canvas座標上のfontSize = 目標画面サイズ / viewScale
+    function lsz(baseScreenPx, minPx, maxPx) {
+        // baseScreenPx: viewScale=1時の基準画面サイズ
+        const screenSz = Math.max(minPx, Math.min(maxPx, baseScreenPx * state.viewScale));
+        return screenSz / state.viewScale;
+    }
 
     ctx.save();
     ctx.translate(state.viewOffsetX, state.viewOffsetY);
@@ -631,7 +640,7 @@ function draw() {
                         const p0 = getPt(i/divX, j/divY);
                         const p1 = getPt((i+1)/divX, (j+1)/divY);
                         const diag = Math.hypot(p1.x-p0.x, p1.y-p0.y);
-                        const fSz = Math.max(12/state.viewScale, Math.min(60/state.viewScale, diag*0.18));
+                        const fSz = Math.min(lsz(14, 8, 48), diag * 0.18);
                         drawTextWithStroke((i+1)+'-'+(j+1), pC.x, pC.y, fSz, 0.55);
                     }
                 }
@@ -697,7 +706,7 @@ function draw() {
             }
 
             // グリッドのj番横線の両端を取得（getPtはこのスコープで有効）
-            const intersections = []; // { t, x, y }
+            const intersections = []; // { t, x, y, j, u }
             for (let j = 1; j < divY; j++) {
                 const pL = getPt(0, j/divY);
                 const pR = getPt(1, j/divY);
@@ -705,7 +714,14 @@ function draw() {
                     freeEnd.x, freeEnd.y, p4.x, p4.y,
                     pL.x, pL.y, pR.x, pR.y
                 );
-                if (hit) intersections.push(hit);
+                if (hit) {
+                    // 横線上のuパラメータを求める（pL→pRの0〜1）
+                    const rowLen = Math.hypot(pR.x-pL.x, pR.y-pL.y);
+                    const u = rowLen > 0
+                        ? Math.hypot(hit.x-pL.x, hit.y-pL.y) / rowLen
+                        : 0;
+                    intersections.push({ ...hit, j, u });
+                }
             }
 
             // tでソートして線分Cを分割
@@ -731,6 +747,96 @@ function draw() {
             });
             ctx.restore();
 
+            // 線分Aのピクセル長（横方向の歩数換算基準）
+            const lineALen = Math.hypot(
+                state.points[1].x - state.points[0].x,
+                state.points[1].y - state.points[0].y
+            );
+
+            // 各交点から左右の隣接縦線までの水平区間を描画・ラベル表示
+            function drawHLabel(startPt, endPt, color) {
+                const segLen = Math.hypot(endPt.x - startPt.x, endPt.y - startPt.y);
+                if (segLen < 1) return;
+                // 横方向なので線分Aを基準に換算
+                const val = lineALen > 0
+                    ? (segLen / lineALen) * state.totalStepsX
+                    : 0;
+                const label = val.toFixed(1) + ' 歩';
+
+                // 線描画（橙の破線）
+                ctx.save();
+                ctx.beginPath();
+                ctx.moveTo(startPt.x, startPt.y);
+                ctx.lineTo(endPt.x, endPt.y);
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 3 / state.viewScale;
+                ctx.setLineDash([6/state.viewScale, 4/state.viewScale]);
+                ctx.lineCap = 'round';
+                ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.restore();
+
+                // ラベル（横線に平行）
+                const mx = (startPt.x + endPt.x) / 2;
+                const my = (startPt.y + endPt.y) / 2;
+                const angle = Math.atan2(endPt.y - startPt.y, endPt.x - startPt.x);
+                const dispAngle = (angle > Math.PI/2 || angle < -Math.PI/2)
+                    ? angle + Math.PI : angle;
+                const fontSize = lsz(13, 8, 30);
+                const pad      = lsz(4, 3, 10);
+
+                ctx.save();
+                ctx.translate(mx, my);
+                ctx.rotate(dispAngle);
+                ctx.font = '900 ' + fontSize + 'px "M PLUS Rounded 1c",sans-serif';
+                const tw = ctx.measureText(label).width;
+                const bw = tw + pad * 2;
+                const bh = fontSize + pad * 2;
+                const r  = bh / 2;
+                ctx.fillStyle   = color;
+                ctx.strokeStyle = '#2A2A2A';
+                ctx.lineWidth   = 1.5 / state.viewScale;
+                ctx.beginPath();
+                ctx.moveTo(-bw/2 + r, -bh/2);
+                ctx.arcTo( bw/2, -bh/2,  bw/2,  bh/2, r);
+                ctx.arcTo( bw/2,  bh/2, -bw/2,  bh/2, r);
+                ctx.arcTo(-bw/2,  bh/2, -bw/2, -bh/2, r);
+                ctx.arcTo(-bw/2, -bh/2,  bw/2, -bh/2, r);
+                ctx.closePath();
+                ctx.fill();
+                ctx.stroke();
+                ctx.textAlign    = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillStyle    = '#fff';
+                ctx.shadowColor  = '#333';
+                ctx.shadowBlur   = 2;
+                ctx.fillText(label, 0, 0);
+                ctx.restore();
+            }
+
+            // 各交点について左右の隣接縦線との区間を描画
+            const hColors = ['#FF6B00', '#FF9500']; // 交点ごとに色を変える
+            intersections.forEach((ip, idx) => {
+                const v = ip.j / divY;
+                const color = hColors[idx % hColors.length];
+
+                // 交点のu（横線上の0〜1）から、左右の隣接縦線のiを特定
+                const iFloat = ip.u * divX;          // 浮動小数点のi位置
+                const iLeft  = Math.floor(iFloat);   // 左の縦線インデックス
+                const iRight = Math.ceil(iFloat);    // 右の縦線インデックス
+
+                // 左側：交点 → 左の縦線との交点
+                if (iLeft >= 0 && iLeft < divX) {
+                    const leftPt = getPt(iLeft / divX, v);
+                    drawHLabel({ x: ip.x, y: ip.y }, leftPt, color);
+                }
+                // 右側：交点 → 右の縦線との交点
+                if (iRight <= divX && iRight > iLeft) {
+                    const rightPt = getPt(iRight / divX, v);
+                    drawHLabel({ x: ip.x, y: ip.y }, rightPt, color);
+                }
+            });
+
             // 各区間の歩数ラベルを描画するヘルパー
             function drawCLabel(startPt, endPt) {
                 const segLen = Math.hypot(endPt.x - startPt.x, endPt.y - startPt.y);
@@ -746,8 +852,8 @@ function draw() {
                 const dispAngle = (angle > Math.PI/2 || angle < -Math.PI/2)
                     ? angle + Math.PI : angle;
 
-                const fontSize = 16 / state.viewScale;
-                const pad      = 5  / state.viewScale;
+                const fontSize = lsz(15, 9, 36);
+                const pad      = lsz(5, 3, 12);
 
                 ctx.save();
                 ctx.translate(mx, my);
@@ -802,7 +908,7 @@ function draw() {
         ctx.lineWidth = 1.5/state.viewScale;
         ctx.stroke();
 
-        drawTextWithStroke(i+1, pt.x, pt.y - 26/state.viewScale, 18/state.viewScale);
+        drawTextWithStroke(i+1, pt.x, pt.y - 26/state.viewScale, lsz(16, 10, 32));
     });
     ctx.restore();
 
