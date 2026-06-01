@@ -233,6 +233,7 @@ const state = {
     imgX: 0, imgY: 0, imgScale: 1,
     gridCorners: [{x:0,y:0},{x:800,y:0},{x:800,y:800},{x:0,y:800}],
     lineBPinIndex: 0, // 0=points[0]と③が線分B、1=points[1]と③が線分B
+    stepsC: 0,        // 線分Cの自動計算歩数
     viewOffsetX: 0, viewOffsetY: 0, viewScale: 1.0,
     isDragging: false,
     draggedPointIndex: -1,
@@ -645,8 +646,8 @@ function draw() {
     /* 線分B：fitThirdPointで決定したpinIndexと③を結ぶ */
     if (state.points.length >= 3) {
         const p3 = state.points[2];
-        const lineBStart  = state.points[state.lineBPinIndex];       // ③と繋がる端点
-        const lineBFreeEnd = state.points[state.lineBPinIndex === 0 ? 1 : 0]; // 自由端（④と繋がる）
+        const lineBStart   = state.points[state.lineBPinIndex];
+        const lineBFreeEnd = state.points[state.lineBPinIndex === 0 ? 1 : 0];
 
         // 線分B描画
         ctx.beginPath();
@@ -659,11 +660,14 @@ function draw() {
         ctx.stroke();
         ctx.setLineDash([]);
 
-        /* ④と線分Bの自由端を結ぶ線 */
+        /* 線分C：④ と lineBFreeEnd を結ぶ線 + c値ラベル */
         if (state.points.length >= 4) {
             const p4 = state.points[3];
+            const freeEnd = lineBFreeEnd;
+
+            // 線分C 描画
             ctx.beginPath();
-            ctx.moveTo(lineBFreeEnd.x, lineBFreeEnd.y);
+            ctx.moveTo(freeEnd.x, freeEnd.y);
             ctx.lineTo(p4.x, p4.y);
             ctx.strokeStyle = '#00aaff';
             ctx.lineWidth = 4 / state.viewScale;
@@ -671,6 +675,59 @@ function draw() {
             ctx.lineCap = 'round';
             ctx.stroke();
             ctx.setLineDash([]);
+
+            // c値を計算（線分Aのピクセル長を基準に逆算）
+            const lineALen = Math.hypot(
+                state.points[1].x - state.points[0].x,
+                state.points[1].y - state.points[0].y
+            );
+            const lineCLen = Math.hypot(p4.x - freeEnd.x, p4.y - freeEnd.y);
+            const cValue = lineALen > 0
+                ? (lineCLen / lineALen) * state.totalStepsX
+                : 0;
+
+            // ラベルを線分Cの中点に、線分Cに平行に描画
+            const mx = (freeEnd.x + p4.x) / 2;
+            const my = (freeEnd.y + p4.y) / 2;
+            const angle = Math.atan2(p4.y - freeEnd.y, p4.x - freeEnd.x);
+
+            // テキストが常に上向き（読みやすい方向）になるよう角度補正
+            const displayAngle = (angle > Math.PI/2 || angle < -Math.PI/2)
+                ? angle + Math.PI : angle;
+
+            const fontSize = 18 / state.viewScale;
+            const label = cValue.toFixed(1) + ' 歩';
+
+            // 背景pill
+            ctx.save();
+            ctx.translate(mx, my);
+            ctx.rotate(displayAngle);
+            const pad = 6 / state.viewScale;
+            ctx.font = '900 ' + fontSize + 'px "M PLUS Rounded 1c",sans-serif';
+            const tw = ctx.measureText(label).width;
+            const bw = tw + pad * 2;
+            const bh = fontSize + pad * 2;
+            ctx.fillStyle = '#00aaff';
+            ctx.strokeStyle = '#2A2A2A';
+            ctx.lineWidth = 2 / state.viewScale;
+            const r = bh / 2;
+            ctx.beginPath();
+            ctx.moveTo(-bw/2 + r, -bh/2);
+            ctx.arcTo( bw/2, -bh/2,  bw/2,  bh/2, r);
+            ctx.arcTo( bw/2,  bh/2, -bw/2,  bh/2, r);
+            ctx.arcTo(-bw/2,  bh/2, -bw/2, -bh/2, r);
+            ctx.arcTo(-bw/2, -bh/2,  bw/2, -bh/2, r);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillStyle = '#ffffff';
+            ctx.shadowColor = '#005588';
+            ctx.shadowBlur = 2;
+            ctx.fillText(label, 0, 0);
+            ctx.restore();
         }
     }
 
