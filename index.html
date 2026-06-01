@@ -232,6 +232,7 @@ const state = {
     points: [],
     imgX: 0, imgY: 0, imgScale: 1,
     gridCorners: [{x:0,y:0},{x:800,y:0},{x:800,y:800},{x:0,y:800}],
+    lineBPinIndex: 0, // 0=points[0]と③が線分B、1=points[1]と③が線分B
     viewOffsetX: 0, viewOffsetY: 0, viewScale: 1.0,
     isDragging: false,
     draggedPointIndex: -1,
@@ -379,14 +380,19 @@ function fitThirdPoint() {
     if (!len) return;
     const ang = Math.atan2(dy, dx);
     const px = Math.sin(ang)*len, py = -Math.cos(ang)*len;
+    // ③に近いのはgridCorners[3](=p1側) と gridCorners[2](=p2側) どちらか
     const dLT = Math.hypot(p3.x - (state.gridCorners[3].x+px), p3.y - (state.gridCorners[3].y+py));
     const dRT = Math.hypot(p3.x - (state.gridCorners[2].x+px), p3.y - (state.gridCorners[2].y+py));
     if (dLT < dRT) {
+        // ③はp1(index 0)側の上コーナー → gridCorners[0]に直接セット
         state.gridCorners[0] = { x: p3.x,      y: p3.y };
         state.gridCorners[1] = { x: p3.x + dx,  y: p3.y + dy };
+        state.lineBPinIndex = 0; // 線分Bはp1(points[0])と③を結ぶ
     } else {
+        // ③はp2(index 1)側の上コーナー → gridCorners[1]に直接セット
         state.gridCorners[1] = { x: p3.x,      y: p3.y };
         state.gridCorners[0] = { x: p3.x - dx,  y: p3.y - dy };
+        state.lineBPinIndex = 1; // 線分Bはp2(points[1])と③を結ぶ
     }
 }
 
@@ -473,6 +479,7 @@ function returnToWork() {
 
 function resetPoints() {
     state.points = [];
+    state.lineBPinIndex = 0;
     state.gridCorners = [{x:0,y:0},{x:CANVAS_SIZE,y:0},{x:CANVAS_SIZE,y:CANVAS_SIZE},{x:0,y:CANVAS_SIZE}];
     state.viewOffsetX = state.viewOffsetY = 0;
     state.viewScale = 1.0;
@@ -631,9 +638,42 @@ function draw() {
         }
     }
 
-    /* Control pins */
+    /* Control pins + extra lines */
     ctx.save();
-    const pinColors = ['#E3350D','#e67e22','#9b59b6'];
+    const pinColors = ['#E3350D','#e67e22','#9b59b6','#00aaff'];
+
+    /* 線分B：fitThirdPointで決定したpinIndexと③を結ぶ */
+    if (state.points.length >= 3) {
+        const p3 = state.points[2];
+        const lineBStart  = state.points[state.lineBPinIndex];       // ③と繋がる端点
+        const lineBFreeEnd = state.points[state.lineBPinIndex === 0 ? 1 : 0]; // 自由端（④と繋がる）
+
+        // 線分B描画
+        ctx.beginPath();
+        ctx.moveTo(lineBStart.x, lineBStart.y);
+        ctx.lineTo(p3.x, p3.y);
+        ctx.strokeStyle = '#9b59b6';
+        ctx.lineWidth = 4 / state.viewScale;
+        ctx.setLineDash([8/state.viewScale, 5/state.viewScale]);
+        ctx.lineCap = 'round';
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        /* ④と線分Bの自由端を結ぶ線 */
+        if (state.points.length >= 4) {
+            const p4 = state.points[3];
+            ctx.beginPath();
+            ctx.moveTo(lineBFreeEnd.x, lineBFreeEnd.y);
+            ctx.lineTo(p4.x, p4.y);
+            ctx.strokeStyle = '#00aaff';
+            ctx.lineWidth = 4 / state.viewScale;
+            ctx.setLineDash([8/state.viewScale, 5/state.viewScale]);
+            ctx.lineCap = 'round';
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
+    }
+
     state.points.forEach((pt, i) => {
         ctx.beginPath();
         ctx.arc(pt.x, pt.y, 14/state.viewScale, 0, Math.PI*2);
@@ -731,7 +771,7 @@ function handlePointerMove(e) {
     if (state.draggedPointIndex !== -1 && activeTouches.length === 1) {
         state.points[state.draggedPointIndex] = { x: tx, y: ty };
         if ((state.draggedPointIndex === 0 || state.draggedPointIndex === 1) && state.points.length >= 2) fitBaseLine();
-        if (state.points.length === 3) fitThirdPoint();
+        if (state.points.length >= 3) fitThirdPoint();
         state.hasMovedSignificantly = true;
         updateValues();
         return;
@@ -777,18 +817,21 @@ function handlePointerUp(e) {
 
     if (!state.hasMovedSignificantly && !state.isPinching && activeTouches.length === 1) {
         const { tx, ty } = canvasCoords(e);
-        if (state.points.length < 3) {
+        if (state.points.length < 4) {
             state.points.push({ x: tx, y: ty });
             if (state.points.length === 1) {
                 guideText.textContent = "③ 基準線（底辺）の『右下の角』をタップしてください";
                 guideText.style.background = '#e67e22';
             } else if (state.points.length === 2) {
                 fitBaseLine();
-                guideText.textContent = "④ 土地の『上の角』をタップ。全ピン配置後はどれでも自由にドラッグ調整できます";
+                guideText.textContent = "④ 土地の『上の角』をタップ";
                 guideText.style.background = '#9b59b6';
-            } else {
+            } else if (state.points.length === 3) {
                 fitThirdPoint();
-                guideText.textContent = '🎉 完了！すべてのピン（1〜3）をドラッグして微調整可能です';
+                guideText.textContent = "⑤ ④点目をタップしてください（線分Bの自由端と結線されます）";
+                guideText.style.background = '#0077cc';
+            } else {
+                guideText.textContent = '🎉 完了！すべてのピン（1〜4）をドラッグして微調整可能です';
                 guideText.style.background = '#27ae60';
             }
             updateValues();
