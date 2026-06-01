@@ -553,18 +553,18 @@ function draw() {
         ctx.restore();
     }
 
+    /* Grid helpers — hoisted so line-C section can also use them */
+    const divX = state.divisionsX || 1;
+    const divY = state.divisionsY || 1;
+    const [lt, rt, rb, lb] = [state.gridCorners[0], state.gridCorners[1], state.gridCorners[2], state.gridCorners[3]];
+    function getPt(u, v) {
+        const tx = lt.x + u*(rt.x-lt.x), ty = lt.y + u*(rt.y-lt.y);
+        const bx = lb.x + u*(rb.x-lb.x), by = lb.y + u*(rb.y-lb.y);
+        return { x: tx + v*(bx-tx), y: ty + v*(by-ty) };
+    }
+
     /* Grid */
     if (state.points.length >= 2) {
-        const divX = state.divisionsX || 1;
-        const divY = state.divisionsY || 1;
-        const [lt, rt, rb, lb] = [state.gridCorners[0], state.gridCorners[1], state.gridCorners[2], state.gridCorners[3]];
-
-        function getPt(u, v) {
-            const tx = lt.x + u*(rt.x-lt.x),  ty = lt.y + u*(rt.y-lt.y);
-            const bx = lb.x + u*(rb.x-lb.x),  by = lb.y + u*(rb.y-lb.y);
-            return { x: tx + v*(bx-tx), y: ty + v*(by-ty) };
-        }
-
         const showInner = (state.divisionsX !== null && state.divisionsY !== null);
         const dense = (divX > 25 || divY > 25);
 
@@ -660,9 +660,9 @@ function draw() {
         ctx.stroke();
         ctx.setLineDash([]);
 
-        /* 線分C：④ と lineBFreeEnd を結ぶ線 + c値ラベル */
+        /* 線分C：④ と lineBFreeEnd を結ぶ線 + 交点分割ラベル */
         if (state.points.length >= 4) {
-            const p4 = state.points[3];
+            const p4      = state.points[3];
             const freeEnd = lineBFreeEnd;
 
             // 線分C 描画
@@ -676,58 +676,114 @@ function draw() {
             ctx.stroke();
             ctx.setLineDash([]);
 
-            // c値を計算（線分Aのピクセル長を基準に逆算）
-            const lineALen = Math.hypot(
-                state.points[1].x - state.points[0].x,
-                state.points[1].y - state.points[0].y
+            // 線分Bのピクセル長 × totalStepsY を基準に逆算
+            // 線分C は線分Bと同方向の辺なので、線分Bを「1歩あたりの基準」とする
+            const lineBLen = Math.hypot(
+                state.points[2].x - lineBStart.x,
+                state.points[2].y - lineBStart.y
             );
-            const lineCLen = Math.hypot(p4.x - freeEnd.x, p4.y - freeEnd.y);
-            const cValue = lineALen > 0
-                ? (lineCLen / lineALen) * state.totalStepsX
-                : 0;
 
-            // ラベルを線分Cの中点に、線分Cに平行に描画
-            const mx = (freeEnd.x + p4.x) / 2;
-            const my = (freeEnd.y + p4.y) / 2;
-            const angle = Math.atan2(p4.y - freeEnd.y, p4.x - freeEnd.x);
+            // ── 線分交差判定（パラメトリック） ──
+            // 線分(p1→p2) と 線分(p3→p4) の交点を返す。なければnull
+            function segIntersect(ax, ay, bx, by, cx, cy, dx, dy) {
+                const r_x = bx-ax, r_y = by-ay;
+                const s_x = dx-cx, s_y = dy-cy;
+                const denom = r_x*s_y - r_y*s_x;
+                if (Math.abs(denom) < 1e-10) return null;
+                const t = ((cx-ax)*s_y - (cy-ay)*s_x) / denom;
+                const u = ((cx-ax)*r_y - (cy-ay)*r_x) / denom;
+                if (t < -1e-9 || t > 1+1e-9 || u < -1e-9 || u > 1+1e-9) return null;
+                return { x: ax + t*r_x, y: ay + t*r_y, t };
+            }
 
-            // テキストが常に上向き（読みやすい方向）になるよう角度補正
-            const displayAngle = (angle > Math.PI/2 || angle < -Math.PI/2)
-                ? angle + Math.PI : angle;
+            // グリッドのj番横線の両端を取得（getPtはこのスコープで有効）
+            const intersections = []; // { t, x, y }
+            for (let j = 1; j < divY; j++) {
+                const pL = getPt(0, j/divY);
+                const pR = getPt(1, j/divY);
+                const hit = segIntersect(
+                    freeEnd.x, freeEnd.y, p4.x, p4.y,
+                    pL.x, pL.y, pR.x, pR.y
+                );
+                if (hit) intersections.push(hit);
+            }
 
-            const fontSize = 18 / state.viewScale;
-            const label = cValue.toFixed(1) + ' 歩';
+            // tでソートして線分Cを分割
+            intersections.sort((a, b) => a.t - b.t);
 
-            // 背景pill
+            // 区間の端点リスト: [freeEnd, ...交点, p4]
+            const pts = [
+                { x: freeEnd.x, y: freeEnd.y },
+                ...intersections,
+                { x: p4.x,      y: p4.y      }
+            ];
+
+            // 交点に黄色の点を描画
             ctx.save();
-            ctx.translate(mx, my);
-            ctx.rotate(displayAngle);
-            const pad = 6 / state.viewScale;
-            ctx.font = '900 ' + fontSize + 'px "M PLUS Rounded 1c",sans-serif';
-            const tw = ctx.measureText(label).width;
-            const bw = tw + pad * 2;
-            const bh = fontSize + pad * 2;
-            ctx.fillStyle = '#00aaff';
-            ctx.strokeStyle = '#2A2A2A';
-            ctx.lineWidth = 2 / state.viewScale;
-            const r = bh / 2;
-            ctx.beginPath();
-            ctx.moveTo(-bw/2 + r, -bh/2);
-            ctx.arcTo( bw/2, -bh/2,  bw/2,  bh/2, r);
-            ctx.arcTo( bw/2,  bh/2, -bw/2,  bh/2, r);
-            ctx.arcTo(-bw/2,  bh/2, -bw/2, -bh/2, r);
-            ctx.arcTo(-bw/2, -bh/2,  bw/2, -bh/2, r);
-            ctx.closePath();
-            ctx.fill();
-            ctx.stroke();
-
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillStyle = '#ffffff';
-            ctx.shadowColor = '#005588';
-            ctx.shadowBlur = 2;
-            ctx.fillText(label, 0, 0);
+            intersections.forEach(ip => {
+                ctx.beginPath();
+                ctx.arc(ip.x, ip.y, 7/state.viewScale, 0, Math.PI*2);
+                ctx.fillStyle = '#FFD700';
+                ctx.fill();
+                ctx.strokeStyle = '#2A2A2A';
+                ctx.lineWidth = 2/state.viewScale;
+                ctx.stroke();
+            });
             ctx.restore();
+
+            // 各区間の歩数ラベルを描画するヘルパー
+            function drawCLabel(startPt, endPt) {
+                const segLen = Math.hypot(endPt.x - startPt.x, endPt.y - startPt.y);
+                if (segLen < 1) return;
+                const cVal = lineBLen > 0
+                    ? (segLen / lineBLen) * state.totalStepsY
+                    : 0;
+                const label = cVal.toFixed(1) + ' 歩';
+
+                const mx = (startPt.x + endPt.x) / 2;
+                const my = (startPt.y + endPt.y) / 2;
+                const angle = Math.atan2(endPt.y - startPt.y, endPt.x - startPt.x);
+                const dispAngle = (angle > Math.PI/2 || angle < -Math.PI/2)
+                    ? angle + Math.PI : angle;
+
+                const fontSize = 16 / state.viewScale;
+                const pad      = 5  / state.viewScale;
+
+                ctx.save();
+                ctx.translate(mx, my);
+                ctx.rotate(dispAngle);
+                ctx.font = '900 ' + fontSize + 'px "M PLUS Rounded 1c",sans-serif';
+                const tw = ctx.measureText(label).width;
+                const bw = tw + pad * 2;
+                const bh = fontSize + pad * 2;
+                const r  = bh / 2;
+
+                ctx.fillStyle   = '#00aaff';
+                ctx.strokeStyle = '#2A2A2A';
+                ctx.lineWidth   = 2 / state.viewScale;
+                ctx.beginPath();
+                ctx.moveTo(-bw/2 + r, -bh/2);
+                ctx.arcTo( bw/2, -bh/2,  bw/2,  bh/2, r);
+                ctx.arcTo( bw/2,  bh/2, -bw/2,  bh/2, r);
+                ctx.arcTo(-bw/2,  bh/2, -bw/2, -bh/2, r);
+                ctx.arcTo(-bw/2, -bh/2,  bw/2, -bh/2, r);
+                ctx.closePath();
+                ctx.fill();
+                ctx.stroke();
+
+                ctx.textAlign    = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillStyle    = '#ffffff';
+                ctx.shadowColor  = '#005588';
+                ctx.shadowBlur   = 2;
+                ctx.fillText(label, 0, 0);
+                ctx.restore();
+            }
+
+            // 全区間を描画
+            for (let k = 0; k < pts.length - 1; k++) {
+                drawCLabel(pts[k], pts[k+1]);
+            }
         }
     }
 
